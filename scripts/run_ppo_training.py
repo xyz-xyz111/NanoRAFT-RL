@@ -42,13 +42,13 @@ def load_config(config_path: str) -> dict:
 
 
 def set_global_seed(seed: int):
-    """设置全局随机种子，提升可复现性"""
+    """设置全局随机种子，提升多次运行的一致性"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    # 尽量保证可复现（会牺牲少量性能）
+    # 尽量保证多次运行一致（会牺牲少量性能）
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 

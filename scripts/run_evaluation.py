@@ -44,7 +44,7 @@ from tqdm import tqdm
 
 
 def set_global_seed(seed: int):
-    """设置全局随机种子，提升评估可复现性"""
+    """设置全局随机种子，提升多次评估的一致性"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
