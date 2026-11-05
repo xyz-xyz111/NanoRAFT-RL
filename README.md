@@ -42,13 +42,14 @@
 - 面向医学推理可解释性：结构化章节 + CoT 输出约束，使模型回答更容易对应到“研究背景-方法-结果-结论”的证据链
 - 面向中文医疗 AI 应用：在英文医学文献基础上生成中文指令与推理回答，增强跨语种医学知识迁移能力
 
-## 实验设置（2026-02-28 实测）
+## 实验设置（2026-11-05 实测）
 
 在当前环境（RTX 4090 24GB、Python 3.10、torch 2.1.2+cu121）下，以下链路已实测跑通：
 
 - SFT：`outputs/raft-sft/final`
-- PPO：`outputs/raft-ppo/final`
-- 评估：`outputs/evaluation_results.json`
+- 原始 PPO：`outputs/raft-ppo/final`
+- 改进 PPO：`outputs/raft-ppo-improved/final`
+- 评估：`outputs/evaluation_results_improved.json`
 
 评估配置为 `data/synthetic/test.jsonl`，实际样本数为 10（`--max_samples 30` 但测试集仅 10 条）。
 
@@ -56,17 +57,30 @@
 
 本次实测评分如下：
 
-| 模型 | 格式得分 | CoT得分 | 答案得分 | 综合得分 |
-|---|---:|---:|---:|---:|
-| 基线模型(Base) | 0.000 | 0.560 | 0.640 | 0.360 |
-| SFT模型 | 0.850 | 0.960 | 0.760 | 0.856 |
-| PPO模型 | 0.800 | 0.870 | 0.660 | 0.779 |
+| 模型 | 格式得分 | CoT得分 | 答案得分 | 综合得分 | 平均长度 |
+|---|---:|---:|---:|---:|---:|
+| 基线模型(Base) | 0.000 | 0.560 | 0.640 | 0.360 | 749 |
+| RAFT-SFT模型 | 0.850 | 0.960 | 0.700 | **0.838** | 385 |
+| 原始PPO模型 | 0.200 | 0.550 | 0.550 | 0.410 | 1001 |
+| 改进PPO模型 | 0.850 | 0.930 | 0.690 | **0.826** | 614 |
 
 结果解读：
 
-- SFT 相对基线综合得分提升显著（`0.360 -> 0.856`），主要体现在格式与 CoT 结构学习。
-- PPO 在保持较高结构分的同时，综合得分稳定高于基线（`0.779 > 0.360`）。
-- SFT 与 PPO 的相对表现会受采样随机性影响，属于生成式模型评估常见现象。
+- RAFT-SFT 将综合得分从 `0.360` 提升到 `0.838`（相对提升约 `132.8%`），主要收益来自格式遵循、证据组织和 CoT 结构学习。
+- 原始 PPO 综合得分仅为 `0.410`，训练 KL 多次达到约 `30–135`，平均输出长度增长到 `1001`，表现出明显的策略漂移和长度奖励投机。
+- 修正参考策略并降低更新幅度后，KL 稳定在约 `-0.6～0.6`，改进 PPO 综合得分达到 `0.826`，较原始 PPO 提升 `0.416`，并接近 RAFT-SFT 的 `0.838`。
+- 改进 PPO 相对基线提升约 `129.4%`；答案分数仍略低于 SFT，说明奖励函数还有进一步加入答案正确性和证据一致性信号的空间。
+- 测试集只有 10 条样本，本结果用于验证训练与评估闭环，并不代表具有统计显著性的模型能力结论。
+
+### PPO 退化定位与修复
+
+退化的核心原因是 TRL 0.7.4 对 PEFT 模型默认调用 `disable_adapter()`，实际使用 Base 模型而非 RAFT-SFT 模型作为参考策略。策略从训练开始就与参考分布相差较大，导致百级 KL。项目完成以下修复：
+
+1. 显式加载并冻结 RAFT-SFT 参考模型，使 KL 在相同初始策略之间计算；
+2. 将学习率从 `1e-5` 降为 `5e-7`，PPO epoch 从 2 降为 1，clip range 从 `0.2` 降为 `0.1`；
+3. 生成时设置 `return_prompt=False`，避免将输入提示误作模型回复；
+4. 对超过 800 字符的回答加入连续长度惩罚；
+5. 监控连续高 KL 并自动提前停止，保留中间检查点。
 
 ## 创新性（AI 方法、医学应用与工程实现）
 
@@ -76,8 +90,8 @@
 2. 医学结构先验融入训练数据
 - PubMed RCT 五段式结构（BACKGROUND/OBJECTIVE/METHODS/RESULTS/CONCLUSIONS）被保留到训练链路，帮助模型学习医学研究的标准叙述范式，而不是仅记忆表面文本模式。
 
-3. 分阶段对齐策略：SFT -> PPO
-- 先用监督学习学会结构化回答，再用 PPO 进一步对齐输出质量，形成“可控格式 + 任务适配”的两阶段优化路径。
+3. 分阶段训练与消融对比：SFT -> PPO
+- 先用监督学习学习结构化回答，再用 PPO 探索奖励对齐；三模型统一评估同时揭示了 RAFT-SFT 的收益与当前 PPO 配置的退化问题。
 
 4. 面向医学问答的轻量奖励工程
 - PPO 阶段奖励函数同时考虑格式合规、推理完整性、答案具体性与幻觉惩罚，避免只追求表面流畅而忽略医学场景中关键的证据一致性。
@@ -86,7 +100,7 @@
 - 评估脚本兼容 LoRA adapter 目录自动加载，并统一比较 Base/SFT/PPO，能直接观察“检索增强训练”和“强化学习对齐”各自带来的增益。
 
 6. 单卡 24GB 的可执行大模型对齐闭环
-- 在 `Qwen2-7B + 4bit + LoRA + gradient checkpointing + 8bit optimizer` 组合下完成端到端训练，降低医学领域团队复现实验的硬件门槛。
+- 在 `Qwen2-7B + 4bit + LoRA + 8bit optimizer` 组合下完成端到端训练，按阶段选择梯度检查点策略，降低医学领域团队复现实验的硬件门槛。
 
 7. 可复现优先的工程化设计
 - 统一缓存目录到 `models/cache`、严格执行 `total_steps`、固定全局随机种子、支持离线运行验证，提升跨次实验的一致性和可追溯性。
@@ -178,13 +192,13 @@ unzip -o /root/autodl-tmp/data.zip -d data
 python -u scripts/run_raft_sft.py --config configs/raft_sft.yaml
 ```
 
-### 3. PPO（可完成版配置）
+### 3. PPO（稳定版配置）
 
 ```bash
-python -u scripts/run_ppo_training.py --config configs/ppo_rl_repro.yaml
+python -u scripts/run_ppo_training.py --config configs/ppo_rl_improved.yaml
 ```
 
-说明：当前实现会严格按照 `total_steps` 执行（dataloader 耗尽后自动续跑）。
+说明：稳定版针对 TRL 0.7.4 显式加载冻结的 RAFT-SFT 参考模型，并加入 KL 监控和长度惩罚。当前实现会严格按照 `total_steps` 执行（dataloader 耗尽后自动续跑）。
 
 ### 4. 评估
 
@@ -193,6 +207,9 @@ python -u scripts/run_evaluation.py \
   --test_file data/synthetic/test.jsonl \
   --max_samples 30 \
   --base_model Qwen/Qwen2-7B-Instruct \
+  --ppo_model outputs/raft-ppo-improved/final \
+  --ppo_label 改进PPO模型 \
+  --output_file outputs/evaluation_results_improved.json \
   --seed 42
 ```
 

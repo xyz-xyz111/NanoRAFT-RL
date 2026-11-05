@@ -280,6 +280,14 @@ def main():
                        help="基座模型名")
     parser.add_argument("--seed", type=int, default=42,
                        help="随机种子（默认42）")
+    parser.add_argument("--sft_model", type=str, default="outputs/raft-sft/final",
+                       help="SFT adapter路径")
+    parser.add_argument("--ppo_model", type=str, default="outputs/raft-ppo/final",
+                       help="PPO adapter路径")
+    parser.add_argument("--ppo_label", type=str, default="PPO模型",
+                       help="PPO模型在结果表中的名称")
+    parser.add_argument("--output_file", type=str, default="outputs/evaluation_results.json",
+                       help="评估结果JSON路径")
     args = parser.parse_args()
     set_global_seed(args.seed)
     print(f"[Setup] 随机种子: {args.seed}")
@@ -303,7 +311,7 @@ def main():
     print("\n" + "="*80)
     print("开始评估: SFT模型")
     print("="*80)
-    sft_eval = RaftEvaluator("outputs/raft-sft/final", "SFT模型")
+    sft_eval = RaftEvaluator(args.sft_model, "SFT模型")
     sft_metrics, _ = sft_eval.evaluate_dataset(args.test_file, args.max_samples)
     all_results.append(sft_metrics)
     
@@ -314,9 +322,9 @@ def main():
     
     # 3. 评估PPO模型
     print("\n" + "="*80)
-    print("开始评估: PPO模型")
+    print(f"开始评估: {args.ppo_label}")
     print("="*80)
-    ppo_eval = RaftEvaluator("outputs/raft-ppo/final", "PPO模型")
+    ppo_eval = RaftEvaluator(args.ppo_model, args.ppo_label)
     ppo_metrics, _ = ppo_eval.evaluate_dataset(args.test_file, args.max_samples)
     all_results.append(ppo_metrics)
     
@@ -336,10 +344,9 @@ def main():
     print("="*80)
     
     # 保存详细结果
-    output_file = "outputs/evaluation_results.json"
-    with open(output_file, 'w', encoding='utf-8') as f:
+    with open(args.output_file, 'w', encoding='utf-8') as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
-    print(f"\n详细结果已保存到: {output_file}")
+    print(f"\n详细结果已保存到: {args.output_file}")
 
 
 if __name__ == "__main__":

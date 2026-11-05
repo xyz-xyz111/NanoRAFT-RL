@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-RAFT PPO 强化学习训练脚本 - TRL 0.8.0 兼容版
+RAFT PPO 强化学习训练脚本 - TRL 0.7.4 兼容版
 """
 
 import os
@@ -30,7 +30,7 @@ print(f"[Setup] 模型缓存目录: {os.environ['HF_HOME']}")
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
-from peft import PeftModel
+from peft import PeftModel, prepare_model_for_kbit_training
 from trl import PPOTrainer, PPOConfig
 from trl.models import AutoModelForCausalLMWithValueHead
 from datasets import Dataset
@@ -97,15 +97,54 @@ def main(config_path: str = "configs/ppo_rl_4090.yaml"):
         torch_dtype=torch.bfloat16,
     )
     
-    # 加载SFT权重 - 开启梯度检查点
-    model = PeftModel.from_pretrained(base_model, model_config["sft_model_path"], is_trainable=True)
+    # 为4bit训练准备梯度，并加载可训练的SFT LoRA。
+    # 小batch PPO关闭gradient checkpointing，避免量化模型输入无梯度。
+    base_model = prepare_model_for_kbit_training(
+        base_model,
+        use_gradient_checkpointing=False,
+    )
+    model = PeftModel.from_pretrained(
+        base_model,
+        model_config["sft_model_path"],
+        is_trainable=True,
+    )
     model = AutoModelForCausalLMWithValueHead.from_pretrained(model)
-    
-    # 【核心修改】开启梯度检查点并关闭cache
-    model.pretrained_model.gradient_checkpointing_enable()
+
+    # TRL 0.7.4在PEFT模式下会关闭adapter并以Base模型计算KL，忽略显式
+    # ref_model。将包装器标记为普通模型后，PPOTrainer会使用下方冻结的
+    # RAFT-SFT参考模型；底层PeftModel及其LoRA训练参数不受影响。
+    model.is_peft_model = False
     model.pretrained_model.config.use_cache = False
-    
-    print("[PPO] 模型加载完成，已开启梯度检查点")
+
+    print("[PPO] 策略模型加载完成")
+
+    print("[PPO] 加载冻结的SFT参考模型...")
+    ref_base_model = AutoModelForCausalLM.from_pretrained(
+        model_config["base_model"],
+        quantization_config=bnb_config,
+        device_map={"": 0},
+        trust_remote_code=model_config.get("trust_remote_code", True),
+        torch_dtype=torch.bfloat16,
+    )
+    ref_peft_model = PeftModel.from_pretrained(
+        ref_base_model,
+        model_config["sft_model_path"],
+        is_trainable=False,
+    )
+    ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(ref_peft_model)
+    ref_model.eval()
+    for param in ref_model.parameters():
+        param.requires_grad_(False)
+
+    policy_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    ref_trainable = sum(p.numel() for p in ref_model.parameters() if p.requires_grad)
+    print(f"[诊断] 策略模型可训练参数: {policy_trainable:,}")
+    print(f"[诊断] 参考模型可训练参数: {ref_trainable:,}")
+    print(f"[诊断] TRL is_peft_model: {model.is_peft_model}")
+    if policy_trainable == 0:
+        raise RuntimeError("策略模型没有可训练参数")
+    if ref_trainable != 0:
+        raise RuntimeError("参考模型未完全冻结")
     
     # 加载数据
     print("\n[步骤3/4] 加载数据...")
@@ -165,6 +204,7 @@ def main(config_path: str = "configs/ppo_rl_4090.yaml"):
     ppo_trainer = PPOTrainer(
         config=ppo_config_obj,
         model=model,
+        ref_model=ref_model,
         tokenizer=tokenizer,
         dataset=dataset,
         data_collator=collator,
@@ -181,11 +221,13 @@ def main(config_path: str = "configs/ppo_rl_4090.yaml"):
         "temperature": ppo_config["temperature"],
         "top_p": ppo_config["top_p"],
         "do_sample": True,
+        "return_prompt": False,
         "pad_token_id": tokenizer.pad_token_id,
     }
     
     total_steps = int(ppo_config["total_steps"])
     dataloader_iter = iter(ppo_trainer.dataloader)
+    high_kl_steps = 0
     for step in range(total_steps):
         try:
             batch = next(dataloader_iter)
@@ -231,16 +273,19 @@ def main(config_path: str = "configs/ppo_rl_4090.yaml"):
             if len(response.split("\n")) >= 3:  # 多行回答，有推理结构
                 reward += 0.1
             
-            # (3) 答案具体性 (0-0.2分)
-            # 检查是否包含具体信息（长度适中，不是空话）
-            if 200 < len(response) < 1500:
+            # (3) 长度质量：鼓励适中回答，防止冗长输出刷奖励
+            response_length = len(response)
+            if 200 <= response_length <= 800:
                 reward += 0.2
-            elif 100 < len(response) < 2000:
+            elif 100 <= response_length < 200:
                 reward += 0.1
-            
-            # (4) 幻觉惩罚 (-0.2分)
-            # 如果回答太短或太长，可能是幻觉或敷衍
-            if len(response) < 50 or len(response) > 3000:
+
+            # 超过800字符后连续扣分，最多扣0.4
+            if response_length > 800:
+                reward -= min(0.4, (response_length - 800) / 2000)
+
+            # 极短回答通常没有完整推理
+            if response_length < 80:
                 reward -= 0.2
             
             rewards.append(torch.tensor(reward, dtype=torch.float32))
@@ -250,11 +295,25 @@ def main(config_path: str = "configs/ppo_rl_4090.yaml"):
         # PPO步骤
         stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
         
+        current_kl = float(stats.get("objective/kl", 0))
+        avg_r = sum(r.item() for r in rewards) / len(rewards)
         if step % ppo_config["logging_steps"] == 0:
-            avg_r = sum(r.item() for r in rewards) / len(rewards)
             print(f"[Step {step}/{ppo_config['total_steps']}] Avg Reward: {avg_r:.3f} | "
-                  f"KL: {stats.get('objective/kl', 0):.4f} | "
+                  f"KL: {current_kl:.4f} | "
                   f"Entropy: {stats.get('objective/entropy', 0):.4f}")
+
+        if current_kl > ppo_config.get("max_kl", 30):
+            high_kl_steps += 1
+        else:
+            high_kl_steps = 0
+
+        if high_kl_steps >= ppo_config.get("max_high_kl_steps", 3):
+            emergency_dir = Path(config["output"]["output_dir"]) / f"early-stop-{step}"
+            emergency_dir.mkdir(parents=True, exist_ok=True)
+            model.save_pretrained(emergency_dir)
+            tokenizer.save_pretrained(emergency_dir)
+            print(f"[Early Stop] KL连续{high_kl_steps}步过高，当前KL={current_kl:.4f}，保存到: {emergency_dir}")
+            break
         
         # 【保险】每次step后清理缓存
         torch.cuda.empty_cache()
