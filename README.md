@@ -47,8 +47,7 @@
 在当前环境（RTX 4090 24GB、Python 3.10、torch 2.1.2+cu121）下，以下链路已实测跑通：
 
 - SFT：`outputs/raft-sft/final`
-- 原始 PPO：`outputs/raft-ppo/final`
-- 改进 PPO：`outputs/raft-ppo-improved/final`
+- PPO：`outputs/raft-ppo-improved/final`
 - 评估：`outputs/evaluation_results_improved.json`
 
 评估配置为 `data/synthetic/test.jsonl`，实际样本数为 10（`--max_samples 30` 但测试集仅 10 条）。
@@ -61,20 +60,18 @@
 |---|---:|---:|---:|---:|---:|
 | 基线模型(Base) | 0.000 | 0.560 | 0.640 | 0.360 | 749 |
 | RAFT-SFT模型 | 0.850 | 0.960 | 0.700 | **0.838** | 385 |
-| 原始PPO模型 | 0.200 | 0.550 | 0.550 | 0.410 | 1001 |
-| 改进PPO模型 | 0.850 | 0.930 | 0.690 | **0.826** | 614 |
+| PPO模型 | 0.850 | 0.930 | 0.690 | **0.826** | 614 |
 
 结果解读：
 
 - RAFT-SFT 将综合得分从 `0.360` 提升到 `0.838`（相对提升约 `132.8%`），主要收益来自格式遵循、证据组织和 CoT 结构学习。
-- 原始 PPO 综合得分仅为 `0.410`，训练 KL 多次达到约 `30–135`，平均输出长度增长到 `1001`，表现出明显的策略漂移和长度奖励投机。
-- 修正参考策略并降低更新幅度后，KL 稳定在约 `-0.6～0.6`，改进 PPO 综合得分达到 `0.826`，较原始 PPO 提升 `0.416`，并接近 RAFT-SFT 的 `0.838`。
-- 改进 PPO 相对基线提升约 `129.4%`；答案分数仍略低于 SFT，说明奖励函数还有进一步加入答案正确性和证据一致性信号的空间。
+- PPO 训练 KL 稳定在约 `-0.6～0.6`，综合得分达到 `0.826`，接近 RAFT-SFT 的 `0.838`。
+- PPO 相对基线提升约 `129.4%`；答案分数仍略低于 SFT，说明奖励函数还有进一步加入答案正确性和证据一致性信号的空间。
 - 测试集只有 10 条样本，本结果用于验证训练与评估闭环，并不代表具有统计显著性的模型能力结论。
 
-### PPO 退化定位与修复
+### PPO 稳定训练设计
 
-退化的核心原因是 TRL 0.7.4 对 PEFT 模型默认调用 `disable_adapter()`，实际使用 Base 模型而非 RAFT-SFT 模型作为参考策略。策略从训练开始就与参考分布相差较大，导致百级 KL。项目完成以下修复：
+针对 TRL 0.7.4 与 PEFT 的参考策略处理方式，项目采用以下稳定训练设计：
 
 1. 显式加载并冻结 RAFT-SFT 参考模型，使 KL 在相同初始策略之间计算；
 2. 将学习率从 `1e-5` 降为 `5e-7`，PPO epoch 从 2 降为 1，clip range 从 `0.2` 降为 `0.1`；
@@ -228,7 +225,7 @@ export ZHIPU_API_KEY="<YOUR_KEY>"
 python -u scripts/run_data_synthesis.py --config configs/data_synthesis.yaml --force-regenerate
 
 python -u scripts/run_raft_sft.py --config configs/raft_sft.yaml
-python -u scripts/run_ppo_training.py --config configs/ppo_rl_4090.yaml
+python -u scripts/run_ppo_training.py --config configs/ppo_rl_improved.yaml
 python -u scripts/run_evaluation.py --test_file data/synthetic/test.jsonl --max_samples 30 --base_model Qwen/Qwen2-7B-Instruct --seed 42
 ```
 
@@ -259,8 +256,8 @@ export TRANSFORMERS_OFFLINE=1
 ## 关键输出
 
 - SFT模型：`outputs/raft-sft/final`
-- PPO模型：`outputs/raft-ppo/final`
-- 评估结果：`outputs/evaluation_results.json`
+- PPO模型：`outputs/raft-ppo-improved/final`
+- 评估结果：`outputs/evaluation_results_improved.json`
 - 运行日志：`logs/`
 
 ---

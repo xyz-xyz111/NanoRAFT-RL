@@ -57,7 +57,7 @@ def collator(data):
     return {key: [d[key] for d in data] for key in data[0]}
 
 
-def main(config_path: str = "configs/ppo_rl_4090.yaml"):
+def main(config_path: str = "configs/ppo_rl_improved.yaml"):
     config = load_config(config_path)
     
     print("=" * 60)
@@ -337,6 +337,6 @@ def main(config_path: str = "configs/ppo_rl_4090.yaml"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RAFT PPO强化学习训练")
-    parser.add_argument("--config", type=str, default="configs/ppo_rl_4090.yaml")
+    parser.add_argument("--config", type=str, default="configs/ppo_rl_improved.yaml")
     args = parser.parse_args()
     main(args.config)

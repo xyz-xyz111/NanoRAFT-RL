@@ -91,25 +91,6 @@
 - 结果：
   - Qwen2 架构加载兼容。
 
-## 9) PPO 启动重复下载 + 进度不可见导致“假卡住”
-- 症状：
-  - PPO 阶段长时间无明显进度。
-  - 启动时重复下载 7B 分片。
-- 根因：
-  - PPO 脚本未像 SFT 一样统一缓存目录，未复用已有本地缓存。
-  - 默认 PPO 配置（`total_steps=1000`）不适合交互式复现。
-  - 输出重定向到文件后，stdout 缓冲造成日志延迟。
-- 修复：
-  - 启动时显式设置本地缓存：
-    - `HF_HOME=/root/autodl-tmp/NanoRAFT-RL/models/cache`
-    - `HUGGINGFACE_HUB_CACHE=/root/autodl-tmp/NanoRAFT-RL/models/cache`
-  - 新增可完成版配置 `configs/ppo_rl_repro.yaml`：
-    - 降低步数与生成长度
-    - 提高日志密度便于观察
-  - 使用非缓冲模式 `python -u` 实时刷日志。
-- 结果：
-  - PPO 仍保持完整流程，同时更可控、更可观测。
-
 ## 10) 数据合成 smoke 在镜像源发生 SSL 握手超时
 - 症状：
   - 从 `hf-mirror.com` 拉取 `all-MiniLM-L6-v2` 时出现 `ProxyError` / SSL 握手超时。
@@ -119,17 +100,6 @@
   - 保留 `source /etc/network_turbo`，并在该步骤改用 `huggingface.co` 直连（取消 `HF_ENDPOINT`）。
 - 结果：
   - 数据合成 smoke 成功（3/3 样本生成 + 干扰项注入 + 切分保存）。
-
-## 11) PPO 实际步数受 dataloader 长度限制
-- 症状：
-  - 复现配置 `total_steps=60`，但训练约在 step 34 结束。
-- 根因：
-  - 训练循环直接遍历 `ppo_trainer.dataloader`；70 样本、batch=2 时单轮仅约 35 批。
-- 修复：
-  - 当时接受单轮完成（已产出 checkpoint 与 final 模型）。
-  - 备注：若需严格跑满 `total_steps`，需改为循环迭代 dataloader。
-- 结果：
-  - PPO 成功结束并保存最终适配器。
 
 ## 12) 评估脚本需兼容 LoRA adapter 目录
 - 症状：

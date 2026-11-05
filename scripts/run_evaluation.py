@@ -282,11 +282,11 @@ def main():
                        help="随机种子（默认42）")
     parser.add_argument("--sft_model", type=str, default="outputs/raft-sft/final",
                        help="SFT adapter路径")
-    parser.add_argument("--ppo_model", type=str, default="outputs/raft-ppo/final",
+    parser.add_argument("--ppo_model", type=str, default="outputs/raft-ppo-improved/final",
                        help="PPO adapter路径")
     parser.add_argument("--ppo_label", type=str, default="PPO模型",
                        help="PPO模型在结果表中的名称")
-    parser.add_argument("--output_file", type=str, default="outputs/evaluation_results.json",
+    parser.add_argument("--output_file", type=str, default="outputs/evaluation_results_improved.json",
                        help="评估结果JSON路径")
     args = parser.parse_args()
     set_global_seed(args.seed)
