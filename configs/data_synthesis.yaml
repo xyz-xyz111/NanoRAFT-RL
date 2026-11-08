@@ -142,15 +142,24 @@ output:
   output_dir: "data/synthetic"
   
   # 数据集划分比例
-  # 100条样本时：70条train，20条val，10条test
+  # 按来源文档/问题分组划分；同源增强样本不会跨集合
   split:
-    train_ratio: 0.7
-    val_ratio: 0.2
+    train_ratio: 0.8
+    val_ratio: 0.1
     # test_ratio = 1 - train_ratio - val_ratio = 0.1
     seed: 42
 
 # ============================================================
-# 6. 课程学习配置 (Curriculum Learning)
+# 6. 合成数据质量门
+# ============================================================
+quality_gate:
+  enabled: true
+  min_question_chars: 20
+  min_context_chars: 100
+  min_output_chars: 50
+
+# ============================================================
+# 7. 课程学习配置 (Curriculum Learning)
 # ============================================================
 curriculum:
   # 是否启用课程学习（逐步增加难度）
@@ -169,7 +178,7 @@ curriculum:
       distractor_ratio: 0.8
 
 # ============================================================
-# 7. 本地模型备选配置 (Fallback)
+# 8. 本地模型备选配置 (Fallback)
 # ============================================================
 # 当API不可用时，可使用本地小模型（质量较低但免费）
 local_fallback:

@@ -15,12 +15,30 @@
 }
 """
 
-from .document_loader import DocumentLoader
-from .retriever import DistractorRetriever
-from .question_generator import QuestionGenerator
-from .distractor_injector import DistractorInjector
-from .alpaca_formatter import AlpacaFormatter
-from .pubmed_parser import PubMedRCTParser, convert_pubmed_to_format
+from importlib import import_module
+
+
+_LAZY_IMPORTS = {
+    "DocumentLoader": (".document_loader", "DocumentLoader"),
+    "DistractorRetriever": (".retriever", "DistractorRetriever"),
+    "QuestionGenerator": (".question_generator", "QuestionGenerator"),
+    "DistractorInjector": (".distractor_injector", "DistractorInjector"),
+    "AlpacaFormatter": (".alpaca_formatter", "AlpacaFormatter"),
+    "apply_quality_gate": (".quality_gate", "apply_quality_gate"),
+    "save_quality_artifacts": (".quality_gate", "save_quality_artifacts"),
+    "PubMedRCTParser": (".pubmed_parser", "PubMedRCTParser"),
+    "convert_pubmed_to_format": (".pubmed_parser", "convert_pubmed_to_format"),
+}
+
+
+def __getattr__(name):
+    """按需导入，避免预处理阶段被无关的检索/GPU依赖阻塞。"""
+    if name not in _LAZY_IMPORTS:
+        raise AttributeError(name)
+    module_name, attribute_name = _LAZY_IMPORTS[name]
+    value = getattr(import_module(module_name, __name__), attribute_name)
+    globals()[name] = value
+    return value
 
 __all__ = [
     "DocumentLoader",
@@ -28,6 +46,8 @@ __all__ = [
     "QuestionGenerator",
     "DistractorInjector",
     "AlpacaFormatter",
+    "apply_quality_gate",
+    "save_quality_artifacts",
     "PubMedRCTParser",
     "convert_pubmed_to_format",
 ]

@@ -41,6 +41,8 @@ from src.data_synthesis import (
     QuestionGenerator,
     DistractorInjector,
     AlpacaFormatter,
+    apply_quality_gate,
+    save_quality_artifacts,
     PubMedRCTParser,
 )
 from src.data_synthesis.question_generator import GeneratedQA
@@ -412,6 +414,7 @@ def main_with_config(config: dict):
     
     # 为每个QA对注入干扰项
     injected_contexts = []
+    successful_qa_list = []
     
     # 使用进度条
     qa_iterator = enumerate(qa_list)
@@ -434,6 +437,7 @@ def main_with_config(config: dict):
             )
             
             injected_contexts.append(injected)
+            successful_qa_list.append(qa)
             
         except Exception as e:
             import traceback
@@ -464,7 +468,8 @@ def main_with_config(config: dict):
     
     # 格式化（使用进度条）
     samples = []
-    format_iterator = zip(qa_list[:len(injected_contexts)], injected_contexts)
+    # 只配对实际注入成功的QA，避免中间失败导致问题与上下文错位。
+    format_iterator = zip(successful_qa_list, injected_contexts)
     
     if TQDM_AVAILABLE:
         format_iterator = tqdm(list(format_iterator), desc="格式化数据", unit="sample")
@@ -481,6 +486,21 @@ def main_with_config(config: dict):
     
     # 保存
     output_dir = config["output"]["output_dir"]
+
+    # 质量门：不合格样本只进入rejected_samples.jsonl，不参与训练划分。
+    quality_config = config.get("quality_gate", {})
+    if quality_config.get("enabled", True):
+        quality_result = apply_quality_gate(
+            samples,
+            min_question_chars=quality_config.get("min_question_chars", 20),
+            min_context_chars=quality_config.get("min_context_chars", 100),
+            min_output_chars=quality_config.get("min_output_chars", 50),
+        )
+        save_quality_artifacts(quality_result, output_dir)
+        samples = quality_result.accepted
+        logger.info(f"质量门结果: {quality_result.report}")
+        if not samples:
+            raise RuntimeError("质量门过滤后没有可用于训练的样本")
     
     # 划分并保存
     formatter.split_and_save(

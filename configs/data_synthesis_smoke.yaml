@@ -32,7 +32,7 @@ question_generation:
     qa_per_chunk: 1
     use_distractors: true
     max_chunk_length: 2000
-    max_chunks: 3
+    max_chunks: 50
 
 distractor:
   difficulty: "medium"
@@ -46,9 +46,15 @@ output:
   dataset_name: "raft_synthetic_smoke"
   output_dir: "data/synthetic_smoke"
   split:
-    train_ratio: 0.7
-    val_ratio: 0.2
+    train_ratio: 0.8
+    val_ratio: 0.1
     seed: 42
+
+quality_gate:
+  enabled: true
+  min_question_chars: 20
+  min_context_chars: 100
+  min_output_chars: 50
 
 curriculum:
   enabled: false

@@ -12,7 +12,8 @@ import torch
 from transformers import (
     TrainingArguments,
     Trainer,
-    DataCollatorForLanguageModeling,
+    EarlyStoppingCallback,
+    default_data_collator,
 )
 from .dataset import create_dataset, tokenize_dataset
 
@@ -72,6 +73,7 @@ def create_training_arguments(config: dict) -> TrainingArguments:
         evaluation_strategy=train_config["evaluation_strategy"],
         load_best_model_at_end=train_config["load_best_model_at_end"],
         metric_for_best_model=train_config["metric_for_best_model"],
+        greater_is_better=train_config.get("greater_is_better", False),
         
         # 混合精度
         fp16=train_config["fp16"],
@@ -120,11 +122,24 @@ def train(
     # 创建训练参数
     training_args = create_training_arguments(train_config)
     
-    # 数据整理器
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,  # 因果语言模型，不是掩码语言模型
+    callbacks = []
+    early_stopping_patience = train_config["training"].get(
+        "early_stopping_patience", 0
     )
+    if eval_dataset is not None and early_stopping_patience > 0:
+        callbacks.append(
+            EarlyStoppingCallback(
+                early_stopping_patience=early_stopping_patience,
+                early_stopping_threshold=train_config["training"].get(
+                    "early_stopping_threshold", 0.0
+                ),
+            )
+        )
+        print(
+            "Early Stopping已启用: "
+            f"patience={early_stopping_patience}, "
+            f"threshold={train_config['training'].get('early_stopping_threshold', 0.0)}"
+        )
     
     # 创建Trainer
     trainer = Trainer(
@@ -132,7 +147,9 @@ def train(
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=data_collator,
+        # 数据集已构造response-only labels；默认collator会原样保留labels。
+        data_collator=default_data_collator,
+        callbacks=callbacks,
     )
     
     # 开始训练
@@ -170,5 +187,10 @@ def print_training_summary(config: dict):
     print(f"Batch size: {train_config['per_device_train_batch_size']} x {train_config['gradient_accumulation_steps']} (累积)")
     print(f"学习率: {train_config['learning_rate']}")
     print(f"训练轮数: {train_config['num_epochs']}")
+    print(
+        "Early Stopping: "
+        f"patience={train_config.get('early_stopping_patience', 0)}, "
+        f"threshold={train_config.get('early_stopping_threshold', 0.0)}"
+    )
     print(f"最大长度: {config['data']['max_seq_length']}")
     print("=" * 60)

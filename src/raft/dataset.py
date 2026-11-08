@@ -122,7 +122,7 @@ def tokenize_dataset(dataset: Dataset, tokenizer, max_length: int = 1024):
     print(f"[Dataset] 正在tokenize，max_length={max_length}")
     
     def tokenize_function(examples):
-        # Tokenize完整的文本
+        # 分别编码完整样本和Prompt，用Prompt长度构造response-only labels。
         result = tokenizer(
             examples["text"],
             truncation=True,
@@ -130,9 +130,40 @@ def tokenize_dataset(dataset: Dataset, tokenizer, max_length: int = 1024):
             padding="max_length",
             return_tensors=None,
         )
-        
-        # 对于因果语言模型，labels=input_ids
-        result["labels"] = result["input_ids"].copy()
+
+        prompt_tokens = tokenizer(
+            examples["prompt"],
+            truncation=True,
+            max_length=max_length,
+            padding=False,
+            return_tensors=None,
+        )
+
+        labels = []
+        response_token_counts = []
+        for input_ids, attention_mask, prompt_ids in zip(
+            result["input_ids"],
+            result["attention_mask"],
+            prompt_tokens["input_ids"],
+        ):
+            sample_labels = input_ids.copy()
+            prompt_length = min(len(prompt_ids), max_length)
+
+            # Instruction、检索上下文和Response标记都不参与损失。
+            sample_labels[:prompt_length] = [-100] * prompt_length
+
+            # Padding位置同样不参与损失。
+            for index, mask_value in enumerate(attention_mask):
+                if mask_value == 0:
+                    sample_labels[index] = -100
+
+            labels.append(sample_labels)
+            response_token_counts.append(
+                sum(1 for token_id in sample_labels if token_id != -100)
+            )
+
+        result["labels"] = labels
+        result["response_token_count"] = response_token_counts
         
         return result
     
@@ -142,7 +173,16 @@ def tokenize_dataset(dataset: Dataset, tokenizer, max_length: int = 1024):
         remove_columns=dataset.column_names,
     )
     
-    print(f"[Dataset] Tokenize完成")
+    before_filter = len(tokenized_dataset)
+    tokenized_dataset = tokenized_dataset.filter(
+        lambda example: example["response_token_count"] > 0
+    )
+    dropped = before_filter - len(tokenized_dataset)
+    tokenized_dataset = tokenized_dataset.remove_columns(["response_token_count"])
+
+    if dropped:
+        print(f"[Dataset] 丢弃 {dropped} 条Response被完全截断的样本")
+    print(f"[Dataset] Tokenize完成，仅Response token参与损失")
     
     return tokenized_dataset
 
