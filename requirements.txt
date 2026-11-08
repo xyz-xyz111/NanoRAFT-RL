@@ -22,12 +22,12 @@ langchain-community==0.0.2
 langchain-openai==0.0.2
 llama-index==0.9.15
 
-# 兼容性约束（sentence-transformers==2.2.2 依赖 cached_download）
-huggingface_hub==0.19.4
+# 与Transformers 4.37及新版Sentence Transformers兼容
+huggingface_hub>=0.19.4,<1.0.0
 
 # 向量数据库与Embedding
 chromadb==0.4.18
-sentence-transformers==2.2.2
+sentence-transformers==3.0.1
 faiss-cpu==1.7.4
 
 # 评估指标
@@ -36,7 +36,7 @@ scikit-learn==1.3.2
 nltk==3.8.1
 
 # 国产大模型API (Python 3.10兼容版本)
-zhipuai==2.1.0
+zhipuai==2.1.0.20240521
 
 # 文档处理
 pypdf==3.17.4

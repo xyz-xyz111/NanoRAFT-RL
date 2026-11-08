@@ -84,13 +84,16 @@ training:
   
   # 日志和保存
   logging_steps: 10
-  save_steps: 100
-  eval_steps: 100
+  save_steps: 5
+  eval_steps: 5
   save_total_limit: 3
   
   evaluation_strategy: "steps"
   load_best_model_at_end: true
   metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  early_stopping_patience: 3
+  early_stopping_threshold: 0.005
   
   # 4090完美支持bf16
   fp16: false

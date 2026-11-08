@@ -20,6 +20,8 @@ RAFT增强格式：
 """
 
 import json
+import hashlib
+import random
 import uuid
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
@@ -244,6 +246,20 @@ class AlpacaFormatter:
         Returns:
             Dict: 元数据字典
         """
+        # 同一来源文档/问题生成的多个增强版本必须进入同一数据划分。
+        # 优先使用上游提供的稳定ID；旧缓存没有ID时使用来源文本哈希兼容。
+        source_id = (
+            qa.metadata.get("source_group_id")
+            or qa.metadata.get("document_id")
+            or qa.metadata.get("source_id")
+        )
+        if not source_id:
+            normalized_source = " ".join(qa.source_chunk.split())
+            source_id = hashlib.sha256(
+                normalized_source.encode("utf-8")
+            ).hexdigest()[:16]
+        injected_text = " ".join(ctx.context_text.split())
+
         return {
             "sample_id": str(uuid.uuid4())[:8],
             "dataset": self.dataset_name,
@@ -255,6 +271,11 @@ class AlpacaFormatter:
             "num_distractor_chunks": len(ctx.distractor_chunks),
             "golden_positions": ctx.golden_positions,
             "source_model": qa.metadata.get("model", "unknown"),
+            "source_group_id": str(source_id),
+            "golden_context_present": all(
+                " ".join(chunk.split()) in injected_text
+                for chunk in ctx.golden_chunks
+            ),
         }
     
     def save_to_jsonl(
@@ -329,7 +350,7 @@ class AlpacaFormatter:
         seed: int = 42,
     ):
         """
-        划分训练/验证/测试集并保存
+        按来源组划分训练/验证/测试集并保存，避免同源增强样本泄漏。
         
         Args:
             samples: 全部样本
@@ -338,19 +359,44 @@ class AlpacaFormatter:
             val_ratio: 验证集比例（剩余为测试集）
             seed: 随机种子
         """
-        import random
-        
-        random.seed(seed)
-        shuffled = samples.copy()
-        random.shuffle(shuffled)
-        
-        n_total = len(shuffled)
-        n_train = int(n_total * train_ratio)
-        n_val = int(n_total * val_ratio)
-        
-        train_samples = shuffled[:n_train]
-        val_samples = shuffled[n_train:n_train + n_val]
-        test_samples = shuffled[n_train + n_val:]
+        if not 0 < train_ratio < 1:
+            raise ValueError("train_ratio必须在0和1之间")
+        if not 0 <= val_ratio < 1 or train_ratio + val_ratio >= 1:
+            raise ValueError("val_ratio无效，且必须为测试集保留比例")
+
+        groups: Dict[str, List[AlpacaSample]] = {}
+        for sample in samples:
+            group_id = sample.metadata.get("source_group_id")
+            if not group_id:
+                # 兼容手工构造的数据；相同问题仍会被放在同一组。
+                normalized_question = " ".join(sample.instruction.split())
+                group_id = hashlib.sha256(
+                    normalized_question.encode("utf-8")
+                ).hexdigest()[:16]
+                sample.metadata["source_group_id"] = group_id
+            groups.setdefault(str(group_id), []).append(sample)
+
+        group_ids = sorted(groups)
+        random.Random(seed).shuffle(group_ids)
+
+        n_groups = len(group_ids)
+        n_train_groups = int(n_groups * train_ratio)
+        n_val_groups = int(n_groups * val_ratio)
+        train_group_ids = group_ids[:n_train_groups]
+        val_group_ids = group_ids[n_train_groups:n_train_groups + n_val_groups]
+        test_group_ids = group_ids[n_train_groups + n_val_groups:]
+        train_ids = set(train_group_ids)
+        val_ids = set(val_group_ids)
+        test_ids = set(test_group_ids)
+
+        train_samples = [sample for gid in train_group_ids for sample in groups[gid]]
+        val_samples = [sample for gid in val_group_ids for sample in groups[gid]]
+        test_samples = [sample for gid in test_group_ids for sample in groups[gid]]
+
+        if train_ids & val_ids or train_ids & test_ids or val_ids & test_ids:
+            raise RuntimeError("检测到source_group_id跨数据集泄漏")
+
+        n_total = len(samples)
         
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -366,8 +412,16 @@ class AlpacaFormatter:
             "train": len(train_samples),
             "val": len(val_samples),
             "test": len(test_samples),
+            "total_groups": n_groups,
+            "train_groups": len(train_ids),
+            "val_groups": len(val_ids),
+            "test_groups": len(test_ids),
             "train_ratio": train_ratio,
             "val_ratio": val_ratio,
+            "test_ratio": round(1 - train_ratio - val_ratio, 10),
+            "seed": seed,
+            "group_key": "metadata.source_group_id",
+            "group_leakage": False,
         }
         
         with open(output_dir / "split_stats.json", 'w') as f:
